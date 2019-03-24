@@ -21,11 +21,6 @@ typedef enum {
 	CMD_C,	/* Compare */
 	CMD_X,	/* Delay */
 } cmd_type_t;
-
-/*
- * DO NOT change the order of fields - particularly reg
- * should be immediately followed by data
- */
 typedef struct {
 	cmd_type_t cmd_type;
 	u8 addr;
@@ -40,4 +35,3 @@ typedef struct {
 
 
 #endif
-

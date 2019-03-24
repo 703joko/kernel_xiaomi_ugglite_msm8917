@@ -8,7 +8,6 @@
  * Copyright (C) 2018 XiaoMi, Inc.
  *
  * Based on a previous work by Copyright (C) 2008 Texas Instruments, Inc.
- * Copyright (C) 2018 XiaoMi, Inc.
  *
  * This package is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -44,16 +43,22 @@
 #include <linux/alarmtimer.h>
 #include "bqfs_cmd_type.h"
 
-#include <linux/hardware_info.h>
-#include "bq27426_gmfs_desay.h"
 #include "bq27426_gmfs_scud.h"
+#include "bq27426_gmfs_coslight.h"
 #include "bq27426_gmfs_sunwoda.h"
-#include "bq27426_gmfs_atl.h"
-#include "bq27426_gmfs_default.h"
+#include "bq27426_gmfs_sdi.h"
+
+#if 1
 
 
 #undef pr_info
+#define pr_info pr_err
+#undef dev_dbg
+#define dev_dbg dev_err
+#else
+#undef pr_info
 #define pr_info pr_debug
+#endif
 
 #define	MONITOR_ALARM_CHECK_NS	5000000000
 #define	INVALID_REG_ADDR	0xFF
@@ -87,6 +92,7 @@ enum bq_fg_reg_idx {
 	BQ_FG_REG_SOC,		/* Relative State of Charge */
 	BQ_FG_REG_SOH,		/* State of Health */
 	BQ_FG_REG_DC,		/* Design Capacity */
+
 	NUM_REGS,
 };
 
@@ -126,6 +132,12 @@ enum {
 	UPDATE_REASON_FORCED,
 };
 
+struct fg_batt_profile {
+	const bqfs_cmd_t * bqfs_image;
+	u32				   array_size;
+	u8				   version;
+};
+
 struct batt_chem_id {
 	u16 id;
 	u16 cmd;
@@ -137,31 +149,11 @@ static struct batt_chem_id batt_chem_id_arr[] = {
 	{3142, FG_SUBCMD_CHEM_C},
 };
 
-struct bq_batt_ids {
-	int kohm;
-	const char *battery_type;
-};
-
-static struct bq_batt_ids bq_batt_ids_attr[] = {
-	{30, "wingtech-Desay-4v4-3000mah"},
-	{68, "wingtech-Scud-4v4-3000mah"},
-	{330, "wingtech-Sunwoda-4v4-3000mah"},
-	{82, "wingtech-Atl-4v4-3000mah"},
-};
-
-
-struct fg_batt_profile {
-	const bqfs_cmd_t *bqfs_image;
-	u32				   array_size;
-	u8				   version;
-};
-
 static const struct fg_batt_profile bqfs_image[] = {
-	{ bqfs_default, ARRAY_SIZE(bqfs_default), 1},
-	{ bqfs_desay, ARRAY_SIZE(bqfs_desay), 33},
-	{ bqfs_scud, ARRAY_SIZE(bqfs_scud), 98},
-	{ bqfs_sunwoda, ARRAY_SIZE(bqfs_sunwoda), 61},
-	{ bqfs_atl, ARRAY_SIZE(bqfs_atl), 98},
+	{ bqfs_scud, ARRAY_SIZE(bqfs_scud), 0x10 },
+	{ bqfs_coslight, ARRAY_SIZE(bqfs_coslight), 0x10 },
+	{ bqfs_sunwoda, ARRAY_SIZE(bqfs_sunwoda), 0x10 },
+	{ bqfs_sdi, ARRAY_SIZE(bqfs_sdi), 0x10 },
 };
 
 const unsigned char *device2str[] = {
@@ -172,23 +164,23 @@ const unsigned char *device2str[] = {
 const unsigned char *update_reason_str[] = {
 	"Reset",
 	"New Version",
-	"Force",
+	"Force"
 };
 
 static u8 bq27426_regs[NUM_REGS] = {
-	0x00,	/* CONTROL */
-	0x02,	/* TEMP */
-	0x04,	/* VOLT */
-	0x10,	/* AVG CURRENT */
-	0x06,	/* FLAGS */
-	0xFF,	/* Time to empty */
-	0xFF,	/* Time to full */
-	0x0E,	/* Full charge capacity */
-	0x0C,	/* Remaining Capacity */
-	0xFF,	/* CycleCount */
-	0x1C,	/* State of Charge */
-	0x20,	/* State of Health */
-	0xFF,	/* Design Capacity */
+	0x00,
+	0x02,
+	0x04,
+	0x10,
+	0x06,
+	0xFF,
+	0xFF,
+	0x0E,
+	0x0C,
+	0xFF,
+	0x1C,
+	0x20,
+	0xFF,
 };
 
 struct bq_fg_chip;
@@ -209,10 +201,6 @@ struct bq_fg_chip {
 	struct mutex update_lock;
 	struct mutex irq_complete;
 
-	struct work_struct fg_soc_work;
-	struct alarm fg_soc_alarm;
-	int 	usb_present;
-
 	bool irq_waiting;
 	bool irq_disabled;
 	bool resume_completed;
@@ -226,7 +214,6 @@ struct bq_fg_chip {
 
 	int	 batt_id;
 
-	/* status tracking */
 
 	bool batt_present;
 	bool batt_fc;
@@ -239,24 +226,23 @@ struct bq_fg_chip {
 	bool cfg_update_mode;
 	bool itpor;
 
-	int	seal_state; /* 0 - Full Access, 1 - Unsealed, 2 - Sealed */
+	int	seal_state;
 	int batt_tte;
 	int	batt_soc;
-	int batt_fcc;	/* Full charge capacity */
-	int batt_rm;	/* Remaining capacity */
-	int	batt_dc;	/* Design Capacity */
+	int batt_fcc;
+	int batt_rm;
+	int	batt_dc;
 	int	batt_volt;
 	int	batt_temp;
 	int	batt_curr;
 
-	int batt_cyclecnt;	/* cycle count */
+	int batt_cyclecnt;
 
 
 	struct work_struct update_work;
 
 	unsigned long last_update;
 
-	/* debug */
 	int	skip_reads;
 	int	skip_writes;
 
@@ -265,15 +251,18 @@ struct bq_fg_chip {
 
 	struct dentry *debug_root;
 
-	struct power_supply *batt_psy;
 	struct power_supply fg_psy;
-	struct power_supply *usb_psy;
 
 	struct qpnp_vadc_chip	*vadc_dev;
 	struct regulator		*vdd;
-	struct regulator		*vcc_i2c;
 	u32	connected_rid;
-	const char *battery_type;
+#if 0
+	u32	profile_rid[BATTERY_PROFILE_MAX];
+	const char			*batt_type_a;
+	const char			*batt_type_b;
+	bool	rsense_10mohm;
+	bool	force_select_profile_b;
+#endif
 };
 
 
@@ -499,7 +488,7 @@ static u8 checksum(u8 *data, u8 len)
 	return (0xFF - sum);
 }
 
-#if 1
+#if 0
 static void fg_print_buf(const char *msg, u8 *buf, u8 len)
 {
 	int i;
@@ -508,7 +497,7 @@ static void fg_print_buf(const char *msg, u8 *buf, u8 len)
 	u8 strbuf[128];
 
 	pr_err("%s buf: ", msg);
-	for (i = 0; i < len; i++) {
+	for(i = 0; i < len; i++) {
 		num = sprintf(&strbuf[idx], "%02X ", buf[i]);
 		idx += num;
 	}
@@ -563,7 +552,7 @@ static int fg_get_seal_state(struct bq_fg_chip *bq)
 		pr_err("Failed to read control status, ret = %d\n", ret);
 		return ret;
 	}
-	pr_err("control_status = 0x%04X", status);
+	pr_err("control_status = 0x%04X\n", status);
 	if (status & 0x2000)
 		bq->seal_state = SEAL_STATE_SEALED;
 	else
@@ -609,7 +598,7 @@ static int fg_unseal(struct bq_fg_chip *bq, u32 key)
 		msleep(100);
 	}
 
-	return -EPERM;
+	return -1;
 }
 
 
@@ -709,7 +698,7 @@ static int fg_check_itpor(struct bq_fg_chip *bq)
 }
 
 
-static int fg_read_dm_version(struct bq_fg_chip *bq, u8 *ver)
+static int fg_read_dm_version(struct bq_fg_chip* bq, u8 *ver)
 {
 	int ret;
 	u16 dm_code = 0;
@@ -723,7 +712,7 @@ static int fg_read_dm_version(struct bq_fg_chip *bq, u8 *ver)
 	msleep(5);
 
 	ret = fg_read_word(bq, bq->regs[BQ_FG_REG_CTRL], &dm_code);
-	if (!ret)
+	if (!ret) 
 		*ver = dm_code & 0xFF;
 	return ret;
 }
@@ -756,7 +745,7 @@ static int fg_dm_pre_access(struct bq_fg_chip *bq)
 
 	pr_err("Failed to enter cfgupdate mode\n");
 
-	return -EPERM;
+	return -1;
 }
 EXPORT_SYMBOL_GPL(fg_dm_pre_access);
 
@@ -773,7 +762,7 @@ static int fg_dm_post_access(struct bq_fg_chip *bq)
 
 	msleep(100);
 
-	while (i++ < CFG_UPDATE_POLLING_RETRY_LIMIT) {
+	while(i++ < CFG_UPDATE_POLLING_RETRY_LIMIT) {
 		ret = fg_check_cfg_update_mode(bq);
 		if (!ret && !bq->cfg_update_mode)
 			break;
@@ -782,7 +771,7 @@ static int fg_dm_post_access(struct bq_fg_chip *bq)
 
 	if (i == CFG_UPDATE_POLLING_RETRY_LIMIT) {
 		pr_err("Failed to exit cfgupdate mode\n");
-		return -EPERM;
+		return -1;
 	} else {
 		return fg_seal(bq);
 	}
@@ -820,7 +809,7 @@ static int fg_dm_read_block(struct bq_fg_chip *bq, u8 classid,
 	ret = fg_read_block(bq, DM_ACCESS_BLOCK_DATA, buf, 32);
 	if (ret < 0)
 		return ret;
-
+	
 	fg_print_buf(__func__, buf, 32);
 
 	msleep(5);
@@ -931,22 +920,6 @@ static int fg_read_status(struct bq_fg_chip *bq)
 }
 
 
-static int fg_get_charger_present(struct bq_fg_chip *bq)
-{
-	union power_supply_propval prop = {0,};
-	int ret;
-
-	ret = bq->usb_psy->get_property(bq->usb_psy,
-							POWER_SUPPLY_PROP_PRESENT, &prop);
-
-	if (!ret)
-		bq->usb_present = prop.intval;
-
-	return ret;
-}
-
-#define CYCLE_DETECT_TIME 30
-u16 monitor_soc = 0;
 static int fg_read_rsoc(struct bq_fg_chip *bq)
 {
 	int ret;
@@ -962,83 +935,6 @@ static int fg_read_rsoc(struct bq_fg_chip *bq)
 
 }
 
-bool monitor_soc_up = 0;
-bool monitor_soc_down = 0;
-static int fg_read_new_rsoc(struct bq_fg_chip *bq)
-{
-	u16 new_soc = 0;
-	ktime_t kt;
-
-	new_soc = fg_read_rsoc(bq);
-	fg_get_charger_present(bq);
-	if (!monitor_soc_up && bq->usb_present && (new_soc == 100 && (bq->batt_soc >= 90 && bq->batt_soc <= 98))) {
-		pr_err("soc jumped, new_soc = %d, old_soc = %d\n", new_soc, bq->batt_soc);
-		monitor_soc_up = 1;
-		monitor_soc_down = 0;
-		kt = ns_to_ktime(CYCLE_DETECT_TIME*NSEC_PER_SEC);
-		alarm_start_relative(&bq->fg_soc_alarm, kt);
-	}
-
-	if (monitor_soc_up || monitor_soc_down) {
-	} else{
-		monitor_soc = new_soc;
-	}
-
-	return monitor_soc;
-
-}
-
-static enum alarmtimer_restart fg_soc_alarm_callback(struct alarm *alarm,
-					ktime_t now)
-{
-	struct bq_fg_chip *bq = container_of(alarm, struct bq_fg_chip,
-						fg_soc_alarm);
-
-	pr_err("fg_soc_jump_callback\n");
-	pm_stay_awake(bq->dev);
-	schedule_work(&bq->fg_soc_work);
-
-	return ALARMTIMER_NORESTART;
-}
-
-static void fg_soc_work_fn(struct work_struct *work)
-{
-	struct bq_fg_chip *bq = container_of(work, struct bq_fg_chip,
-						fg_soc_work);
-	ktime_t kt;
-	u16 real_soc = 0;
-	real_soc = fg_read_rsoc(bq);
-
-	fg_get_charger_present(bq);
-	if (monitor_soc_up && bq->usb_present) {
-		monitor_soc += 1;
-		monitor_soc = (monitor_soc <= 100) ? monitor_soc : 100;
-	}
-
-	pr_err("fg_soc_work_fn  monitor_soc = %d\n", monitor_soc);
-	if (!bq->usb_present && monitor_soc <= 99) {
-		pr_err("fg_soc_work_fn fg_soc_work_fn monitor_soc_down\n");
-		monitor_soc_down = 1;
-		monitor_soc_up = 0;
-	}
-	if (monitor_soc == 100 || real_soc <= monitor_soc) {
-		pr_err("fg_soc_work_fn  alarm stop\n");
-		monitor_soc_up = 0;
-		monitor_soc_down = 0;
-	}
-
-	power_supply_changed(&bq->fg_psy);
-
-	if (monitor_soc_down || monitor_soc_up) {
-		kt = ns_to_ktime(CYCLE_DETECT_TIME*NSEC_PER_SEC);
-		alarm_start_relative(&bq->fg_soc_alarm, kt);
-	}
-
-	pm_relax(bq->dev);
-}
-
-
-#define DEFAULT_TEMP 2980
 static int fg_read_temperature(struct bq_fg_chip *bq)
 {
 	int ret;
@@ -1050,76 +946,9 @@ static int fg_read_temperature(struct bq_fg_chip *bq)
 		return ret;
 	}
 
-
-#ifdef CONFIG_DISABLE_TEMP_PROTECT
-	pr_err("Disable temp control Version!\n");
-	return DEFAULT_TEMP;
-#else
 	return temp;
-#endif
 
 }
-
-#define DEFAULT_RESISTER 45
-static int fg_get_battid_resister(struct bq_fg_chip *bq)
-{
-	int rc = 0;
-	int bq_battid_resister = 0;
-	struct qpnp_vadc_result results;
-
-	rc = qpnp_vadc_read(bq->vadc_dev, P_MUX4_1_1, &results);
-	if (rc) {
-		pr_debug("Unable to read batt resister rc=%d\n", rc);
-		return DEFAULT_RESISTER;
-	}
-
-	bq_battid_resister = (results.physical)*100/(1800000 - results.physical);
-
-	return bq_battid_resister;
-}
-
-
-static char *bq_default_batt_type = "Generic_Battery";
-
-static int bq_batterydata_get_best_profile(struct bq_fg_chip *bq)
-{
-	int delta = 0, best_id_kohm = 0, id_range_pct = 15,
-		batt_id_kohm = 0, i = 0,  limit = 0;
-
-	batt_id_kohm = fg_get_battid_resister(bq);
-
-	for (i = 0; i < ARRAY_SIZE(bq_batt_ids_attr); i++) {
-		delta = abs(bq_batt_ids_attr[i].kohm - batt_id_kohm);
-		limit = (bq_batt_ids_attr[i].kohm * id_range_pct) / 100;
-		if (delta <= limit) {
-			best_id_kohm = bq_batt_ids_attr[i].kohm;
-			bq->battery_type = bq_batt_ids_attr[i].battery_type;
-			goto out;
-		}
-	}
-
-	pr_err("out of range, using default battery, best_id_kohm=%d\n", batt_id_kohm);
-
-	bq->battery_type = bq_default_batt_type;
-
-out:
-	pr_err("%s found\n", bq->battery_type);
-	hardwareinfo_set_prop(HARDWARE_BATTERY_ID, bq->battery_type);
-
-	if (best_id_kohm == 30) {
-		bq->batt_id = 1;
-	} else if (best_id_kohm == 68) {
-		bq->batt_id = 2;
-	} else if (best_id_kohm == 330) {
-		bq->batt_id = 3;
-	} else if (best_id_kohm == 82) {
-		bq->batt_id = 4;
-	} else
-		bq->batt_id = 0;
-
-	return 0;
-}
-
 
 static int fg_read_volt(struct bq_fg_chip *bq)
 {
@@ -1220,7 +1049,7 @@ static int fg_read_cyclecount(struct bq_fg_chip *bq)
 
 	if (bq->regs[BQ_FG_REG_CC] == INVALID_REG_ADDR) {
 		pr_err("Cycle Count not supported!\n");
-		return -EPERM;
+		return -1;
 	}
 
 	ret = fg_read_word(bq, bq->regs[BQ_FG_REG_CC], &cc);
@@ -1240,7 +1069,7 @@ static int fg_read_tte(struct bq_fg_chip *bq)
 
 	if (bq->regs[BQ_FG_REG_TTE] == INVALID_REG_ADDR) {
 		pr_err("Time To Empty not supported!\n");
-		return -EPERM;
+		return -1;
 	}
 
 	ret = fg_read_word(bq, bq->regs[BQ_FG_REG_TTE], &tte);
@@ -1258,18 +1087,12 @@ static int fg_read_tte(struct bq_fg_chip *bq)
 
 static int fg_get_batt_status(struct bq_fg_chip *bq)
 {
-	union power_supply_propval prop = {0,};
-	int ret;
 
-	ret = bq->usb_psy->get_property(bq->usb_psy,
-							POWER_SUPPLY_PROP_PRESENT, &prop);
-	if (ret < 0)
-		pr_err("could not read USB current_max property, ret=%d\n", ret);
 	fg_read_status(bq);
 
 	if (!bq->batt_present)
 		return POWER_SUPPLY_STATUS_UNKNOWN;
-	else if (bq->batt_fc && prop.intval)
+	else if (bq->batt_fc)
 		return POWER_SUPPLY_STATUS_FULL;
 	else if (bq->batt_dsg)
 		return POWER_SUPPLY_STATUS_DISCHARGING;
@@ -1309,14 +1132,18 @@ static int fg_get_batt_health(struct bq_fg_chip *bq)
 		return POWER_SUPPLY_HEALTH_GOOD;
 
 }
+#if 0
+static void parse_dt(struct bq_fg_chip *bq)
+{
+
+}
+#endif
 
 static enum power_supply_property fg_props[] = {
 	POWER_SUPPLY_PROP_STATUS,
 	POWER_SUPPLY_PROP_PRESENT,
 	POWER_SUPPLY_PROP_VOLTAGE_NOW,
 	POWER_SUPPLY_PROP_CURRENT_NOW,
-	POWER_SUPPLY_PROP_RESISTANCE_ID,
-	POWER_SUPPLY_PROP_BATTERY_TYPE,
 	POWER_SUPPLY_PROP_CAPACITY,
 	POWER_SUPPLY_PROP_CAPACITY_LEVEL,
 	POWER_SUPPLY_PROP_TEMP,
@@ -1326,6 +1153,7 @@ static enum power_supply_property fg_props[] = {
 
 	POWER_SUPPLY_PROP_HEALTH,
 	POWER_SUPPLY_PROP_TECHNOLOGY,
+	POWER_SUPPLY_PROP_RESISTANCE_ID,
 	POWER_SUPPLY_PROP_UPDATE_NOW,
 };
 
@@ -1356,21 +1184,16 @@ static int fg_get_property(struct power_supply *psy, enum power_supply_property 
 		mutex_lock(&bq->data_lock);
 		fg_read_current(bq, &bq->batt_curr);
 		val->intval = -bq->batt_curr * 1000;
-		pr_info("bq27426 current=%d\n", val->intval);
+
 		mutex_unlock(&bq->data_lock);
 		break;
-	case POWER_SUPPLY_PROP_RESISTANCE_ID:
-		val->intval = fg_get_battid_resister(bq);
-		break;
-	case POWER_SUPPLY_PROP_BATTERY_TYPE:
-		val->strval = bq->battery_type;
-		break;
+
 	case POWER_SUPPLY_PROP_CAPACITY:
 		if (bq->fake_soc >= 0) {
 			val->intval = bq->fake_soc;
 			break;
 		}
-		ret = fg_read_new_rsoc(bq);
+		ret = fg_read_rsoc(bq);
 		mutex_lock(&bq->data_lock);
 		if (ret >= 0)
 			bq->batt_soc = ret;
@@ -1398,7 +1221,7 @@ static int fg_get_property(struct power_supply *psy, enum power_supply_property 
 	case POWER_SUPPLY_PROP_TIME_TO_EMPTY_NOW:
 		ret = fg_read_tte(bq);
 		mutex_lock(&bq->data_lock);
-		if (ret >= 0)
+		if (ret >=0)
 			bq->batt_tte = ret;
 
 		val->intval = bq->batt_tte;
@@ -1410,8 +1233,7 @@ static int fg_get_property(struct power_supply *psy, enum power_supply_property 
 		mutex_lock(&bq->data_lock);
 		if (ret > 0)
 			bq->batt_fcc = ret;
-
-		val->intval = 3000;
+		val->intval = bq->batt_fcc * 1000;
 		mutex_unlock(&bq->data_lock);
 		break;
 
@@ -1441,6 +1263,9 @@ static int fg_get_property(struct power_supply *psy, enum power_supply_property 
 		val->intval = POWER_SUPPLY_TECHNOLOGY_LIPO;
 		break;
 
+	case POWER_SUPPLY_PROP_RESISTANCE_ID:
+		val->intval = bq->connected_rid ;
+		break;
 	case POWER_SUPPLY_PROP_UPDATE_NOW:
 		val->intval = 0;
 		break;
@@ -1452,7 +1277,6 @@ static int fg_get_property(struct power_supply *psy, enum power_supply_property 
 	mutex_unlock(&bq->update_lock);
 	return 0;
 }
-
 static void fg_dump_registers(struct bq_fg_chip *bq);
 
 static int fg_set_property(struct power_supply *psy,
@@ -1502,6 +1326,12 @@ static int fg_prop_is_writeable(struct power_supply *psy,
 
 static void fg_external_power_changed(struct power_supply *psy)
 {
+#if 0
+	struct bq_fg_chip *bq = container_of(psy, struct bq_fg_chip, fg_psy);
+
+	cancel_delayed_work(&bq->monitor_work);
+	schedule_delayed_work(&bq->monitor_work, 0);
+#endif
 
 }
 
@@ -1563,7 +1393,7 @@ static int fg_change_chem_id(struct bq_fg_chip *bq, u16 new_id)
 	}
 
 	for (i = 0; i < ARRAY_SIZE(batt_chem_id_arr); i++) {
-		if (new_id == batt_chem_id_arr[i].id)
+		if (new_id == batt_chem_id_arr[i].id) 
 			break;
 	}
 
@@ -1590,7 +1420,6 @@ static int fg_change_chem_id(struct bq_fg_chip *bq, u16 new_id)
 		return ret;
 
 	msleep(2000);
-	/* Read back checm id to confirm  */
 	ret = fg_read_word(bq, bq->regs[BQ_FG_REG_CTRL], &old_id);
 	if (ret < 0) {
 		pr_err("Failed to read control status, ret = %d\n", ret);
@@ -1616,7 +1445,6 @@ static int fg_check_update_necessary(struct bq_fg_chip *bq)
 		return UPDATE_REASON_FG_RESET;
 
 	ret = fg_read_dm_version(bq, &dm_ver);
-	pr_err("bq27426 dm_ver = %d\n", dm_ver);
 	if (!ret && dm_ver < bqfs_image[bq->batt_id].version)
 		return UPDATE_REASON_NEW_VERSION;
 	else
@@ -1650,7 +1478,7 @@ static bool fg_update_bqfs_execute_cmd(struct bq_fg_chip *bq,
 			return false;
 		if (memcmp(tmp_buf, cmd->data.bytes, cmd->data_len)) {
 			pr_info("CMD_C failed at line %d\n", cmd->line_num);
-			for (i = 0; i < cmd->data_len; i++) {
+			for(i = 0; i < cmd->data_len; i++) {
 				pr_err("Read: %02X, Cmp:%02X", tmp_buf[i], cmd->data.bytes[i]);
 			}
 			return false;
@@ -1692,8 +1520,6 @@ static void fg_update_bqfs(struct bq_fg_chip *bq)
 		pr_err("batt_id is out of range");
 		return;
 	}
-	/* TODO:if unseal, enter cfg update mode cmd sequence are in gmfs file,
-	  no need to do explicitly */
 	fg_dm_pre_access(bq);
 
 	pr_err("Fuel Gauge parameter update, reason:%s, version:%d, batt_id=%d Start...\n",
@@ -1714,13 +1540,11 @@ static void fg_update_bqfs(struct bq_fg_chip *bq)
 
 	pr_err("Done!\n");
 
-	/* TODO:exit cfg update mode and seal device if these are not handled in gmfs file */
 	fg_dm_post_access(bq);
 	return;
 
 }
 EXPORT_SYMBOL_GPL(fg_update_bqfs);
-
 
 static const u8 fg_dump_regs[] = {
 	0x00, 0x02, 0x04, 0x06,
@@ -1731,38 +1555,6 @@ static const u8 fg_dump_regs[] = {
 	0x66, 0x68, 0x6C, 0x6E,
 	0x70,
 };
-
-static void fg_dump_registers(struct bq_fg_chip *bq)
-{
-	int i;
-	int ret;
-	u16 val = 0;
-
-	if (bq->batt_present) {
-		mutex_lock(&bq->update_lock);
-
-		bq->batt_soc = fg_read_new_rsoc(bq);
-		bq->batt_volt = fg_read_volt(bq);
-		fg_read_current(bq, &bq->batt_curr);
-		bq->batt_temp = fg_read_temperature(bq);
-		bq->batt_rm = fg_read_rm(bq);
-
-		mutex_unlock(&bq->update_lock);
-		pr_err("BQ27426 --RSOC:%d, Volt:%d, Current:%d, Temperature:%d\n",
-			bq->batt_soc, bq->batt_volt, bq->batt_curr, bq->batt_temp - 2730);
-	}
-
-	pr_err("Reg[00 -70] = ");
-	for (i = 0; i < ARRAY_SIZE(fg_dump_regs); i++) {
-		msleep(5);
-		ret = fg_read_word(bq, fg_dump_regs[i], &val);
-		if (!ret)
-			printk("0x%04X, ", val);
-	}
-	printk("\n");
-}
-EXPORT_SYMBOL_GPL(fg_dump_registers);
-
 
 static int show_registers(struct seq_file *m, void *data)
 {
@@ -1775,7 +1567,7 @@ static int show_registers(struct seq_file *m, void *data)
 		msleep(5);
 		ret = fg_read_word(bq, fg_dump_regs[i], &val);
 		if (!ret)
-			seq_printf(m, "Reg[%02X] = 0x%04X\n",
+			seq_printf(m, "Reg[%02X] = 0x%04X\n", 
 						fg_dump_regs[i], val);
 	}
 	return 0;
@@ -1849,14 +1641,14 @@ static ssize_t fg_attr_show_Ra_table(struct device *dev,
 	mutex_lock(&bq->update_lock);
 	ret = fg_dm_pre_access(bq);
 	if (ret) {
-		sprintf(buf, "%s", err_str[0]);
+		sprintf(buf,"%s", err_str[0]);
 		mutex_unlock(&bq->update_lock);
 		return strlen(err_str[0]);
 	}
 
 	ret = fg_dm_read_block(bq, 89, 0, rd_buf);
 	if (ret) {
-		sprintf(buf, "%s", err_str[1]);
+		sprintf(buf,"%s", err_str[1]);
 		fg_dm_post_access(bq);
 		mutex_unlock(&bq->update_lock);
 		return strlen(err_str[1]);
@@ -1892,14 +1684,14 @@ static ssize_t fg_attr_show_Qmax(struct device *dev,
 	mutex_lock(&bq->update_lock);
 	ret = fg_dm_pre_access(bq);
 	if (ret) {
-		sprintf(buf, "%s", err_str[0]);
+		sprintf(buf,"%s", err_str[0]);
 		mutex_unlock(&bq->update_lock);
 		return strlen(err_str[0]);
 	}
 
 	ret = fg_dm_read_block(bq, 82, 0, rd_buf);
 	if (ret) {
-		sprintf(buf, "%s", err_str[1]);
+		sprintf(buf,"%s", err_str[1]);
 		fg_dm_post_access(bq);
 		mutex_unlock(&bq->update_lock);
 		return strlen(err_str[1]);
@@ -1945,11 +1737,11 @@ static ssize_t fg_attr_show_dmcode(struct device *dev,
 }
 
 
+
 static DEVICE_ATTR(RaTable, S_IRUGO, fg_attr_show_Ra_table, NULL);
 static DEVICE_ATTR(Qmax, S_IRUGO, fg_attr_show_Qmax, NULL);
 static DEVICE_ATTR(update, S_IWUSR, NULL, fg_attr_store_update);
 static DEVICE_ATTR(dmcode, S_IRUGO, fg_attr_show_dmcode, NULL);
-
 
 static struct attribute *fg_attributes[] = {
 	&dev_attr_RaTable.attr,
@@ -1959,11 +1751,9 @@ static struct attribute *fg_attributes[] = {
 	NULL,
 };
 
-
 static const struct attribute_group fg_attr_group = {
 	.attrs = fg_attributes,
 };
-
 
 static void fg_update_bqfs_workfunc(struct work_struct *work)
 {
@@ -1973,19 +1763,30 @@ static void fg_update_bqfs_workfunc(struct work_struct *work)
 		fg_update_bqfs(bq);
 }
 
+static void fg_dump_registers(struct bq_fg_chip *bq)
+{
+	int i;
+	int ret;
+	u16 val;
+
+	for (i = 0; i < ARRAY_SIZE(fg_dump_regs); i++) {
+		msleep(5);
+		ret = fg_read_word(bq, fg_dump_regs[i], &val);
+		if (!ret)
+			printk("Reg[%02X] = 0x%04X ", fg_dump_regs[i], val);
+	}
+	pr_info("bq27426 fg_dump_registers\n");
+}
+
 static irqreturn_t fg_irq_thread(int irq, void *dev_id)
 {
 	struct bq_fg_chip *bq = dev_id;
-
-
-
-
 	bool last_batt_present;
 
 	mutex_lock(&bq->irq_complete);
 	bq->irq_waiting = true;
 	if (!bq->resume_completed) {
-		pr_info("IRQ triggered before device resume\n");
+
 		if (!bq->irq_disabled) {
 			disable_irq_nosync(irq);
 			bq->irq_disabled = true;
@@ -2000,12 +1801,15 @@ static irqreturn_t fg_irq_thread(int irq, void *dev_id)
 	mutex_lock(&bq->update_lock);
 	fg_read_status(bq);
 	mutex_unlock(&bq->update_lock);
-	pr_info("itpor=%d, cfg_mode = %d, seal_state=%d, batt_present=%d",
+
+
+
+	pr_info("itpor=%d, cfg_mode = %d, seal_state=%d, batt_present=%d\n",
 			bq->itpor, bq->cfg_update_mode, bq->seal_state, bq->batt_present);
 
-	if (!last_batt_present && bq->batt_present) {/* battery inserted */
+	if (!last_batt_present && bq->batt_present ) {
 		pr_info("Battery inserted\n");
-	} else if (last_batt_present && !bq->batt_present) {/* battery removed */
+	} else if (last_batt_present && !bq->batt_present) {
 		pr_info("Battery removed\n");
 		bq->batt_soc	= -ENODATA;
 		bq->batt_fcc	= -ENODATA;
@@ -2015,6 +1819,21 @@ static irqreturn_t fg_irq_thread(int irq, void *dev_id)
 		bq->batt_temp	= -ENODATA;
 		bq->batt_cyclecnt = -ENODATA;
 	}
+
+	if (bq->batt_present) {
+		mutex_lock(&bq->update_lock);
+
+		bq->batt_soc = fg_read_rsoc(bq);
+		bq->batt_volt = fg_read_volt(bq);
+		fg_read_current(bq, &bq->batt_curr);
+		bq->batt_temp = fg_read_temperature(bq);
+		bq->batt_rm = fg_read_rm(bq);
+
+		mutex_unlock(&bq->update_lock);
+		pr_err("RSOC:%d, Volt:%d, Current:%d, Temperature:%d, connected_rid = %d\n",
+			bq->batt_soc, bq->batt_volt, bq->batt_curr, bq->batt_temp - 2730, bq->connected_rid);
+	}
+
 	power_supply_changed(&bq->fg_psy);
 	mutex_unlock(&bq->irq_complete);
 
@@ -2026,25 +1845,155 @@ static void determine_initial_status(struct bq_fg_chip *bq)
 {
 	fg_irq_thread(bq->client->irq, bq);
 }
+static void convert_rid2battid(struct bq_fg_chip *bq)
+{
+
+	if (bq->connected_rid > 400 && bq->connected_rid < 600) {
+		bq->batt_id = 3;
+	} else if (bq->connected_rid > 220 && bq->connected_rid < 385) {
+		bq->batt_id = 2;
+	} else if (bq->connected_rid > 60 && bq->connected_rid < 140) {
+		bq->batt_id = 1;
+	} else if (bq->connected_rid > 10 && bq->connected_rid < 50) {
+		bq->batt_id = 0;
+	} else {
+		bq->batt_id = 1;
+	}
+}
+
 
 #define SMB_VTG_MIN_UV		1800000
 #define SMB_VTG_MAX_UV		1800000
+static int fg_parse_batt_id(struct bq_fg_chip *bq)
+{
+	int rc = 0, rpull = 0, vref = 0;
+	int64_t denom, batt_id_uv;
+	struct device_node *node = bq->dev->of_node;
+	struct qpnp_vadc_result result;
+
+	bq->vdd = regulator_get(bq->dev, "vdd");
+	if (IS_ERR(bq->vdd)) {
+		pr_err("Regulator get failed vdd rc=%d\n", rc);
+
+	}
+
+	if (regulator_count_voltages(bq->vdd) > 0) {
+		rc = regulator_set_voltage(bq->vdd, SMB_VTG_MIN_UV,
+					   SMB_VTG_MAX_UV);
+		if (rc) {
+			pr_err("Regulator set_vtg failed vdd rc=%d\n", rc);
+		}
+	}
+
+	rc = regulator_enable(bq->vdd);
+	if (rc) {
+		pr_err("Regulator vdd enable failed rc=%d\n", rc);
+	}
+
+	rc = of_property_read_u32(node, "ti,batt-id-vref-uv", &vref);
+	if (rc < 0) {
+		pr_err("Couldn't read batt-id-vref-uv rc=%d\n", rc);
+		return rc;
+	}
+
+
+	rc = of_property_read_u32(node, "ti,batt-id-rpullup-kohm", &rpull);
+	if (rc < 0) {
+		pr_err("Couldn't read batt-id-rpullup-kohm rc=%d\n", rc);
+		return rc;
+	}
+	pr_debug("fg_parse_batt_id begin read battery ID \n");
+	rc = qpnp_vadc_read(bq->vadc_dev, P_MUX2_1_1, &result);
+	if (rc) {
+		pr_err("error reading batt id channel = %d, rc = %d\n",
+					LR_MUX2_BAT_ID, rc);
+		return rc;
+	}
+
+
+	batt_id_uv = result.physical;
+
+
+	pr_debug("fg_parse_batt_id  batt_id_uv = %lld\n",batt_id_uv);
+
+	if (batt_id_uv == 0) {
+		pr_err("batt_id_uv = 0, batt-id grounded using same profile\n");
+		return 0;
+	}
+
+	denom = div64_s64(vref * 1000000LL, batt_id_uv) - 1000000LL;
+
+
+	pr_debug("fg_parse_batt_id  denom = %lld,rpull=%d\n",denom,rpull);
+	if (denom == 0) {
+		pr_err("smb_parse_batt_id batt id connector might be open, return 0 kohms");
+		return 0;
+	}
+	bq->connected_rid = div64_s64(rpull * 1000000LL + denom/2, denom);
+	pr_err("batt_id_voltage = %lld, connected_rid = %d\n",
+			batt_id_uv, bq->connected_rid);
+
+	convert_rid2battid(bq);
+
+	return 0;
+}
+
+static int bq_parse_dt(struct bq_fg_chip *bq)
+{
+#if 0
+	int rc;
+	struct device_node *node = bq->dev->of_node;
+	const char *batt_type_str_a, *batt_type_str_b;
+
+	if (!node) {
+		dev_err(bq->dev, "device tree info. missing\n");
+		return -EINVAL;
+	}
+
+		 bq->force_select_profile_b = of_property_read_bool(node,
+					"agassiz,force-select-profile-b");
+		 pr_debug("force select profile b is support(%d)\n",
+					bq->force_select_profile_b);
+
+		 rc = of_property_read_string(node, "ti,battery-type-a",
+									    &batt_type_str_a);
+		 if (rc) {
+				pr_err("Not support battery type A: %d\n", rc);
+				rc = 0;
+		  } else
+		bq->batt_type_a = batt_type_str_a;
+
+		 rc = of_property_read_string(node, "ti,battery-type-b",
+									    &batt_type_str_b);
+		 if (rc) {
+				pr_err("Not support battery type B: %d\n", rc);
+				rc = 0;
+		  } else
+		bq->batt_type_b = batt_type_str_b;
+
+	bq->rsense_10mohm = of_property_read_bool(node, "ti,rsense-10mhom");
+
+	if (of_property_read_bool(node, "ti,batt-profile-select")) {
+		rc = smb_parse_batt_id(chip);
+		if (rc < 0) {
+			if (rc != -EPROBE_DEFER)
+				pr_err("Unable to parse batt-id rc=%d\n", rc);
+			return rc;
+		}
+	}
+	pr_err("bq_parse_dt end\n");
+#endif
+
+	return 0;
+}
 
 static int bq_fg_probe(struct i2c_client *client,
 							const struct i2c_device_id *id)
 {
 
 	int ret;
-	int rc = 0;
 	struct bq_fg_chip *bq;
-	struct power_supply *usb_psy;
 	u8 *regs;
-
-	usb_psy = power_supply_get_by_name("usb");
-	if (!usb_psy) {
-		dev_dbg(&client->dev, "USB supply not found, defer probe\n");
-		return -EPROBE_DEFER;
-	}
 
 	bq = devm_kzalloc(&client->dev, sizeof(*bq), GFP_KERNEL);
 
@@ -2056,7 +2005,6 @@ static int bq_fg_probe(struct i2c_client *client,
 	bq->dev = &client->dev;
 	bq->client = client;
 	bq->chip = id->driver_data;
-	bq->usb_psy = usb_psy;
 
 	bq->batt_soc	= -ENODATA;
 	bq->batt_fcc	= -ENODATA;
@@ -2089,7 +2037,7 @@ static int bq_fg_probe(struct i2c_client *client,
 	bq->resume_completed = true;
 	bq->irq_waiting = false;
 
-	bq->vadc_dev = qpnp_get_vadc(bq->dev, "battid");
+	bq->vadc_dev = qpnp_get_vadc(bq->dev, "batt_id");
 	if (IS_ERR(bq->vadc_dev)) {
 		ret = PTR_ERR(bq->vadc_dev);
 		if (ret == -EPROBE_DEFER)
@@ -2099,35 +2047,14 @@ static int bq_fg_probe(struct i2c_client *client,
 
 		return ret;
 	}
-
-	bq->vcc_i2c = regulator_get(bq->dev, "vcc_i2c");
-	if (IS_ERR(bq->vcc_i2c)) {
-		pr_err("Regulator get failed vdd rc=%d\n", rc);
-
-	}
-
-	if (regulator_count_voltages(bq->vcc_i2c) > 0) {
-		rc = regulator_set_voltage(bq->vcc_i2c, SMB_VTG_MIN_UV,
-					   SMB_VTG_MAX_UV);
-		if (rc) {
-			pr_err("Regulator set_vtg failed vdd rc=%d\n", rc);
-		}
-	}
-
-	rc = regulator_enable(bq->vcc_i2c);
-	if (rc) {
-		pr_err("Regulator vdd enable failed rc=%d\n", rc);
-	}
-
-	ret = bq_batterydata_get_best_profile(bq);
+	ret = bq_parse_dt(bq);
 	if (ret < 0) {
 		dev_err(&client->dev, "Unable to parse DT nodes\n");
+
 	}
 	INIT_WORK(&bq->update_work, fg_update_bqfs_workfunc);
 
-
-	INIT_WORK(&bq->fg_soc_work, fg_soc_work_fn);
-	alarm_init(&bq->fg_soc_alarm, ALARM_REALTIME, fg_soc_alarm_callback);
+	fg_parse_batt_id(bq);
 
 	fg_update_bqfs(bq);
 
@@ -2156,10 +2083,8 @@ static int bq_fg_probe(struct i2c_client *client,
 	}
 
 	determine_initial_status(bq);
-	bq->batt_soc = fg_read_rsoc(bq);
-	monitor_soc = bq->batt_soc;
 
-	pr_info("bq fuel gauge probe successfully, %s FW ver:%d\n",
+	pr_err("bq fuel gauge probe successfully, %s FW ver:%d\n",
 			device2str[bq->chip], bq->fw_ver);
 
 	return 0;
@@ -2236,8 +2161,6 @@ static int bq_fg_remove(struct i2c_client *client)
 	mutex_destroy(&bq->update_lock);
 	mutex_destroy(&bq->irq_complete);
 
-	alarm_cancel(&bq->fg_soc_alarm);
-
 	debugfs_remove_recursive(bq->debug_root);
 	sysfs_remove_group(&bq->dev->kobj, &fg_attr_group);
 
@@ -2254,7 +2177,7 @@ static struct of_device_id bq_fg_match_table[] = {
 	{.compatible = "ti,bq27426",},
 	{},
 };
-MODULE_DEVICE_TABLE(of, bq_fg_match_table);
+MODULE_DEVICE_TABLE(of,bq_fg_match_table);
 
 static const struct i2c_device_id bq_fg_id[] = {
 	{ "bq27426", BQ27426 },
@@ -2288,4 +2211,3 @@ module_i2c_driver(bq_fg_driver);
 MODULE_DESCRIPTION("TI BQ2742x Gauge Driver");
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Texas Instruments");
-

@@ -143,7 +143,7 @@
 #define	REG06_OVP_MASK				0xC0
 #define	REG06_OVP_SHIFT				0x6
 #define	REG06_OVP_5P5V				0
-#define	REG06_OVP_6P5V				1
+#define	REG06_OVP_6P2V				1
 #define	REG06_OVP_10P5V				2
 #define	REG06_OVP_14P3V				3
 
@@ -303,6 +303,5 @@
 
 
 #endif
-
 
 

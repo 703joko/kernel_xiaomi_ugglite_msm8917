@@ -47,7 +47,7 @@ enum iboost {
 
 enum vac_ovp {
 	VAC_OVP_5500 = 5500,
-	VAC_OVP_6500 = 6500,
+	VAC_OVP_6200 = 6200,
 	VAC_OVP_10500 = 10500,
 	VAC_OVP_14300 = 14300,
 };
@@ -67,4 +67,3 @@ struct bq2560x_platform_data {
 };
 
 #endif
-
