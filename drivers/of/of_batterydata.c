@@ -404,32 +404,13 @@ struct device_node *of_batterydata_get_best_profile(
 					best_id_kohm = batt_ids.kohm[i];
 				}
 			}
+		if (best_node ==NULL) {
+			pr_err("sunxing no battery data configed,add default\n");
+			best_node = node;
+			best_id_kohm = batt_ids.kohm[i];
+			return best_node;
 		}
-	}
-
-#if defined(CONFIG_A13N_PMI8952) || defined(CONFIG_D1_ROSY)
-
-	if (best_node == NULL) {
-		for_each_child_of_node(batterydata_container_node, node) {
-				if (default_batt_type != NULL) {
-					rc = of_property_read_string(node, "qcom,battery-type",
-									&battery_type);
-					if (!rc && strcmp(battery_type, default_batt_type) == 0) {
-						best_node = node;
-						best_id_kohm = batt_id_kohm;
-						default_id = true;
-						pr_err("No battery data found, Use default battery data\n");
-						break;
-					}
-				}
-			}
-	}
-
-#endif
-
-	if (best_node == NULL) {
-		pr_err("No battery data found\n");
-		return best_node;
+		}
 	}
 
 	/* check that profile id is in range of the measured batt_id */
