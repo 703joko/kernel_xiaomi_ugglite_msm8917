@@ -505,7 +505,6 @@ struct mdss_dsi_ctrl_pdata {
 	struct dsi_panel_cmds cabc_on_cmds;
 	struct dsi_panel_cmds cabc_off_cmds;
 	struct dsi_panel_cmds cold_cmds;
-	struct dsi_panel_cmds warm_cmds;
 	struct dsi_panel_cmds default_cmds;
 	struct dsi_panel_cmds level1_cmds;
 	struct dsi_panel_cmds level2_cmds;

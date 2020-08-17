@@ -4447,7 +4447,7 @@ extern int mdss_dsi_panel_gamma(struct mdss_panel_data *pdata);
 		if (ctrl_pdata->nature_cmds.link_state == DSI_HS_MODE)
 			mdss_dsi_set_tx_power_mode(0, &ctrl_pdata->panel_data);
 
-		ret = mdss_dsi_panel_gamma(pdata);
+		ret = -EINVAL;
 		if (ret) {
 			pr_err("%s: unable to set the panel gamma\n",
 					__func__);
@@ -4500,7 +4500,7 @@ extern int mdss_dsi_panel_ce(struct mdss_panel_data *pdata);
 		if (ctrl_pdata->nature_cmds.link_state == DSI_HS_MODE)
 			mdss_dsi_set_tx_power_mode(0, &ctrl_pdata->panel_data);
 
-		ret = mdss_dsi_panel_ce(pdata);
+		ret = -EINVAL;
 		if (ret) {
 			pr_err("%s: unable to set the panel ce\n", __func__);
 			goto err_out;
